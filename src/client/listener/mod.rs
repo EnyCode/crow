@@ -14,45 +14,82 @@ use tokio::net::TcpListener;
 
 use super::events::Events;
 
+mod commands;
 mod events;
+mod interactions;
 mod verification;
 
 /// A generic slack request
 /// We only have the type as that is the only value we need to see where the data should go.
 #[derive(Deserialize)]
-struct SlackRequest {
+struct SlackJsonRequest {
     pub(super) r#type: String,
+}
+
+/// Used to tell what type of request we are getting from slack
+#[derive(Deserialize)]
+struct SlackFormRequest {
+    pub(super) command: Option<String>,
+    pub(super) payload: Option<String>,
 }
 
 async fn handle_req(
     req: Request<hyper::body::Incoming>,
     secret: String,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
+    println!("req");
+
+    let headers = req.headers().clone();
+    let ty = headers.get("Content-Type").unwrap();
+
     let content = match verification::verify(req, secret).await {
         Ok(content) => content,
         Err(_) => return Ok(Response::new(Full::new(Bytes::from("Invalid request")))),
     };
 
-    let ty = match serde_json::from_str::<SlackRequest>(content.as_str()) {
-        Ok(SlackRequest { r#type }) => r#type,
-        Err(_) => return Ok(Response::new(Full::new(Bytes::from("Invalid request")))),
+    if ty == "application/json" {
+        return Ok(Response::new(Full::new(handle_json(content).await?)));
+    }
+
+    if ty == "application/x-www-form-urlencoded" {
+        return Ok(Response::new(Full::new(handle_form(content).await?)));
+    }
+
+    Ok(Response::new(Full::new(Bytes::from("Invalid request"))))
+}
+
+async fn handle_json(content: String) -> Result<Bytes, Infallible> {
+    let ty = match serde_json::from_str::<SlackJsonRequest>(content.as_str()) {
+        Ok(SlackJsonRequest { r#type }) => r#type,
+        Err(_) => return Ok(Bytes::from("Invalid request")),
     };
 
     println!("got request with type {}", ty);
 
     match ty.as_str() {
-        "url_verification" => Ok(Response::new(Full::new(
-            verification::url_verification(content).await,
-        ))),
-        "event_callback" => Ok(Response::new(Full::new(
-            events::handle_event(content).await,
-        ))),
-        _ => Ok(Response::new(Full::new(Bytes::from("Invalid request")))),
+        "url_verification" => Ok(verification::url_verification(content).await),
+        "event_callback" => Ok(events::handle_event(content).await),
+        _ => Ok(Bytes::from("Invalid request")),
     }
 }
 
+async fn handle_form(content: String) -> Result<Bytes, Infallible> {
+    println!("got form request: {}", content);
+    let form: SlackFormRequest = serde_html_form::from_str(&content).unwrap();
+
+    if form.command.is_some() {
+        return Ok(commands::handle_command(content).await);
+    }
+
+    if form.payload.is_some() {
+        return Ok(interactions::handle_interaction(form.payload.unwrap()).await);
+    }
+
+    Ok(Bytes::from(""))
+}
+
 pub async fn listen(port: u16, signing_secret: String) {
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
     // We create a TcpListener and bind it to 127.0.0.1:3000
     let listener = TcpListener::bind(addr).await.unwrap();

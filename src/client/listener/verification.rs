@@ -57,7 +57,8 @@ pub(super) async fn verify(req: Request<Incoming>, signing_secret: String) -> Re
 
     println!(
         "failed to verify - signature: {:?}, slack_signature: {:?}",
-        signature, slack_signature
+        signature.encode_hex::<String>(),
+        slack_signature
     );
 
     Err(())

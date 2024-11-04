@@ -9,7 +9,7 @@ use tokio::sync::mpsc::Sender;
 
 use crate::client::{
     events::{Events, MemberJoinedChannelEvent},
-    EVENTS,
+    Channel, User, EVENTS,
 };
 
 // umm how much of this is important?
@@ -57,9 +57,9 @@ pub(super) async fn handle_event(content: String) -> Bytes {
                 .get()
                 .unwrap()
                 .send(Events::MemberJoinedChannel(MemberJoinedChannelEvent {
-                    channel: ev.channel,
-                    user: ev.user,
-                    inviter: ev.inviter.unwrap_or("".to_string()),
+                    channel: Channel::new(ev.channel),
+                    user: User::new(ev.user),
+                    inviter: ev.inviter.map(|inviter| User::new(inviter)),
                 }))
                 .await
                 .unwrap();
